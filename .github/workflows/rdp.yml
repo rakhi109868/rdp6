@@ -1,0 +1,390 @@
+name: 2022 RDP SERVER
+
+on:
+  workflow_dispatch:
+    inputs:
+      os_version:
+        description: '🪟 Select Windows OS Version'
+        required: true
+        default: 'windows-2022'
+        type: choice
+        options:
+        - 'windows-2022'
+        - 'windows-latest'
+        - 'windows-2019'
+      duration:
+        description: '🕐 Usage duration'
+        required: false
+        default: '5h40m'
+        type: choice
+        options:
+        - '1h'
+        - '3h' 
+        - '5h40m'
+      password:
+        description: '🔐 RDP Password (leave default or enter custom)'
+        required: false
+        default: 'Catizen@'
+        type: string
+      auto_restart:
+        description: '🔄 Auto-restart new cloud server when session ends?'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+        - 'false'
+        - 'true'
+
+jobs:
+  Premium-RDP-Setup:
+    runs-on: ${{ github.event.inputs.os_version || 'windows-2022' }}
+    timeout-minutes: 350
+    
+    steps:
+      # WELCOME BANNER
+      - name: 🎯 INITIALIZING CLOUD SYSTEM
+        run: |
+          Write-Host ""
+          Write-Host "🤖 INHUMAN RDP CLOUD SERVER" -ForegroundColor Yellow
+          Write-Host "⚡ OS Environment: Windows Server 2022 Datacenter" -ForegroundColor Green
+          Write-Host "🌐 Applications: Python 3.11.9" -ForegroundColor Cyan
+          Write-Host "🕒 Duration: ${{ github.event.inputs.duration }}" -ForegroundColor Magenta
+          Write-Host ""
+          
+          $frames = @('⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷')
+          for($i=0; $i -lt 10; $i++) {
+              Write-Host "`r🚀 Initializing clean cloud system... $($frames[$i % 8])" -NoNewline -ForegroundColor Blue
+              Start-Sleep -Milliseconds 100
+          }
+          Write-Host "`r✅ System initialization started!                    " -ForegroundColor Green
+
+      # SETUP PYTHON 3.11.9
+      - name: 🐍 SETUP PYTHON 3.11.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11.9'
+          architecture: 'x64'
+
+      # SYSTEM PERFORMANCE OPTIMIZATION
+      - name: ⚡ SYSTEM PERFORMANCE OPTIMIZATION
+        run: |
+          Write-Host ""
+          Write-Host "🛠️  OPTIMIZING SYSTEM PERFORMANCE" -ForegroundColor Yellow
+          
+          # Boost CPU performance by disabling Defender real-time scanning
+          Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+          
+          Write-Host "🎯 Configuration completed!" -ForegroundColor Green
+
+      # SET ADMINISTRATOR ACCOUNT WITH PASSWORD
+      - name: 👤 CONFIGURING ADMINISTRATOR ACCOUNT
+        run: |
+          Write-Host ""
+          Write-Host "👤 CONFIGURING ADMINISTRATOR ACCOUNT" -ForegroundColor Yellow
+          
+          $user = "Administrator"
+          $matKhau = if ("${{ github.event.inputs.password }}") { "${{ github.event.inputs.password }}" } else { "Catizen@" }
+          $securePass = ConvertTo-SecureString $matKhau -AsPlainText -Force
+          
+          try {
+              Set-LocalUser -Name $user -Password $securePass -PasswordNeverExpires $true -AccountNeverExpires $true -ErrorAction SilentlyContinue
+              Enable-LocalUser -Name $user -ErrorAction SilentlyContinue
+              Write-Host "│ ✅ Password set for Administrator account" -ForegroundColor Green
+          } catch {
+              try {
+                  New-LocalUser -Name $user -Password $securePass -AccountNeverExpires -Description "Administrator RDP Account" -ErrorAction SilentlyContinue
+                  Enable-LocalUser -Name $user -ErrorAction SilentlyContinue
+                  Write-Host "│ ✅ Created Administrator account" -ForegroundColor Green
+              } catch {
+                  Write-Host "│ ⚠️ Error setting Administrator password: $($_.Exception.Message)" -ForegroundColor Yellow
+              }
+          }
+
+          Add-LocalGroupMember -Group "Administrators" -Member $user -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $user -ErrorAction SilentlyContinue
+          
+          Add-Content -Path $env:GITHUB_ENV -Value "RDP_USER=$user"
+          Add-Content -Path $env:GITHUB_ENV -Value "RDP_PASS=$matKhau"
+          Set-Content -Path "$env:TEMP\rdp_password.txt" -Value $matKhau -Encoding utf8
+          
+          Write-Host "✅ Account: $user with password: $matKhau is ready" -ForegroundColor Green
+
+      # TAILSCALE NETWORK SETUP
+      - name: 🌐 SETTING UP NETWORK
+        env:
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          Write-Host ""
+          Write-Host "🌐 SETTING UP NETWORK CONNECTION" -ForegroundColor Yellow
+          
+          try {
+              $msiPath = "$env:TEMP\tailscale-premium.msi"
+              Invoke-WebRequest -Uri "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile $msiPath
+              Start-Process msiexec.exe -ArgumentList "/i", "`"$msiPath`"", "/quiet", "/norestart" -Wait
+              Remove-Item $msiPath -Force -ErrorAction SilentlyContinue
+              Write-Host "│ ✅ Installed Tailscale successfully" -ForegroundColor Green
+          } catch {
+              Write-Host "│ ❌ Failed to install Tailscale" -ForegroundColor Red
+          }
+          
+          Start-Sleep -Seconds 10
+          
+          $hostSuffix = Get-Random -Minimum 100 -Maximum 999
+          $hostname = "ai-stv-rdp-$hostSuffix"
+          
+          try {
+              & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=$env:TAILSCALE_AUTH_KEY --hostname=$hostname --accept-routes --accept-dns --reset
+              Write-Host "│ ✅ Connected to Tailscale successfully with hostname '$hostname'" -ForegroundColor Green
+          } catch {
+              Write-Host "│ ❌ Failed to connect to Tailscale" -ForegroundColor Red
+          }
+          
+          Write-Host "🔄 Fetching IP address..." -NoNewline -ForegroundColor Blue
+          $ip = $null
+          for($i=0; $i -lt 20; $i++) {
+              try {
+                  $ip = (& "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4 2>&1) -join ""
+                  $ip = $ip.Trim()
+                  if ($ip -and $ip -match '^\d+\.\d+\.\d+\.\d+$') {
+                      Add-Content -Path $env:GITHUB_ENV -Value "TAILSCALE_IP=$ip"
+                      Write-Host "`r✅ Tailscale IP Address: $ip" -ForegroundColor Green
+                      break
+                  }
+              } catch {
+              }
+              Write-Host "`r🔄 Fetching IP address... $(@('.', '..', '...')[$i % 3])" -NoNewline -ForegroundColor Blue
+              Start-Sleep -Seconds 3
+          }
+          
+          if (-not $ip -or $ip -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+              Write-Host "`r⚠️  Unable to fetch IP, falling back to localhost" -ForegroundColor Yellow
+              Add-Content -Path $env:GITHUB_ENV -Value "TAILSCALE_IP=localhost"
+          }
+
+          # Fetch Public IP for regional info
+          try {
+              $publicIp = (Invoke-RestMethod -Uri "https://api.ipify.org" -TimeoutSec 5).Trim()
+              Write-Host "│ 🌍 Public Runner IP: $publicIp" -ForegroundColor Cyan
+              Add-Content -Path $env:GITHUB_ENV -Value "PUBLIC_IP=$publicIp"
+          } catch {
+              Add-Content -Path $env:GITHUB_ENV -Value "PUBLIC_IP=Unavailable"
+          }
+
+      # CONNECTION INFORMATION DISPLAY
+      - name: 🎉 CONNECTION DETAILS
+        run: |
+          $matKhau = $env:RDP_PASS
+          $user = $env:RDP_USER
+          
+          $durationInput = "${{ github.event.inputs.duration }}"
+          switch ($durationInput) {
+              "1h" { $totalMinutes = 60; $displayTime = "1 hour" }
+              "3h" { $totalMinutes = 180; $displayTime = "3 hours" }
+              "5h40m" { $totalMinutes = 340; $displayTime = "5 hours 40 minutes" }
+              default { $totalMinutes = 340; $displayTime = "5 hours 40 minutes" }
+          }
+          
+          $timeZone = [System.TimeZoneInfo]::FindSystemTimeZoneById("SE Asia Standard Time")
+          $startTime = [System.TimeZoneInfo]::ConvertTimeFromUtc((Get-Date).ToUniversalTime(), $timeZone)
+          $endTime = $startTime.AddMinutes([double]$totalMinutes)
+          $freeDisk = [math]::Round((Get-PSDrive C).Free / 1GB, 2)
+          $pyVer = python --version 2>&1
+          
+          Write-Host ""
+          Write-Host "┌───────────────────────────────────────────┐" -ForegroundColor Cyan
+          Write-Host "│        🎉 CONNECTION SUCCESSFUL!          │" -ForegroundColor Cyan
+          Write-Host "├───────────────────────────────────────────┤" -ForegroundColor Cyan
+          Write-Host "│ 🪟  OS Version:   Windows Server 2022" -ForegroundColor White
+          Write-Host "│ 🌐  Browser:      Google Chrome (Installed)" -ForegroundColor White
+          Write-Host "│ 🐍  Python:       $pyVer" -ForegroundColor White
+          Write-Host "│ 🌐  Tailscale IP: $env:TAILSCALE_IP (FIXED)" -ForegroundColor White
+          Write-Host "│ 🌍  Public IP:    $env:PUBLIC_IP" -ForegroundColor White
+          Write-Host "│ 👤  Username:     $user" -ForegroundColor White
+          Write-Host "│ 🔐  Password:     $matKhau" -ForegroundColor White
+          Write-Host "│ ⚡  Cloud Spec:   2 vCPU | 7GB RAM" -ForegroundColor White
+          Write-Host "│ 💾  Free Storage: ${freeDisk} GB" -ForegroundColor White
+          Write-Host "│ ⏰  Duration:     $displayTime" -ForegroundColor White
+          Write-Host "│ 🕐  Start:        $($startTime.ToString('HH:mm:ss'))" -ForegroundColor White
+          Write-Host "│ 🕐  End:          $($endTime.ToString('HH:mm:ss'))" -ForegroundColor White
+          Write-Host "│ 📍  Port:         3389" -ForegroundColor White
+          Write-Host "├───────────────────────────────────────────┤" -ForegroundColor Cyan
+          Write-Host "│ 💡  Instructions:                         │" -ForegroundColor Cyan
+          Write-Host "│   1. Open Remote Desktop Connection       │" -ForegroundColor Yellow
+          Write-Host "│   2. Enter IP: $env:TAILSCALE_IP          │" -ForegroundColor Yellow
+          Write-Host "│   3. User: $user | Pass: $matKhau         │" -ForegroundColor Yellow
+          Write-Host "│   4. Enjoy! 🚀                            │" -ForegroundColor Yellow
+          Write-Host "└───────────────────────────────────────────┘" -ForegroundColor Cyan
+          
+          Add-Content -Path $env:GITHUB_ENV -Value "TOTAL_MINUTES=$totalMinutes"
+
+      # SEND NOTIFICATION TO TELEGRAM
+      - name: 📱 SEND CONNECTION INFO TO TELEGRAM
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          Write-Host ""
+          Write-Host "📱 SENDING CONNECTION INFO TO TELEGRAM" -ForegroundColor Yellow
+          if ($env:TELEGRAM_BOT_TOKEN -and $env:TELEGRAM_CHAT_ID) {
+            $msgLines = @(
+              "🚀 *RDP Server is Ready!*",
+              "",
+              "🌐 *Tailscale IP:* ``$($env:TAILSCALE_IP)``",
+              "🌍 *Public IP:* ``$($env:PUBLIC_IP)``",
+              "👤 *Username:* ``$($env:RDP_USER)``",
+              "🔑 *Password:* ``$($env:RDP_PASS)``",
+              "📍 *Port:* ``3389``",
+              "⏱️ *Duration:* ${{ github.event.inputs.duration || '5h40m' }}",
+              "",
+              "💡 *Remote Desktop Connection:*",
+              "``$($env:TAILSCALE_IP):3389``"
+            )
+            $msg = $msgLines -join "`n"
+
+            $payload = @{
+              chat_id    = $env:TELEGRAM_CHAT_ID
+              text       = $msg
+              parse_mode = "Markdown"
+            } | ConvertTo-Json
+
+            try {
+              $response = Invoke-RestMethod -Uri "https://api.telegram.org/bot$($env:TELEGRAM_BOT_TOKEN)/sendMessage" `
+                                            -Method Post `
+                                            -ContentType "application/json; charset=utf-8" `
+                                            -Body ([System.Text.Encoding]::UTF8.GetBytes($payload))
+              Write-Host "✅ Telegram alert sent successfully!" -ForegroundColor Green
+            } catch {
+              Write-Host "⚠️ Failed to send Telegram alert: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+          } else {
+            Write-Host "ℹ️ Skipping Telegram alert: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID secret is not set." -ForegroundColor Gray
+          }
+
+      # MAINTAIN SESSION
+      - name: ⏳ MAINTAIN SESSION KEEPALIVE
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          $matKhau = $env:RDP_PASS
+          $totalMinutes = if ($env:TOTAL_MINUTES) { [double]$env:TOTAL_MINUTES } else { 340 }
+          
+          $timeZone = [System.TimeZoneInfo]::FindSystemTimeZoneById("SE Asia Standard Time")
+          $startTime = [System.TimeZoneInfo]::ConvertTimeFromUtc((Get-Date).ToUniversalTime(), $timeZone)
+          $endTime = $startTime.AddMinutes($totalMinutes)
+          
+          Write-Host ""
+          Write-Host "🔄 STARTING SESSION KEEPALIVE..." -ForegroundColor Yellow
+          Write-Host "💎 Session: AI STV PREMIUM (Windows Server 2022)" -ForegroundColor Magenta
+          Write-Host "🔗 Connection: $env:TAILSCALE_IP" -ForegroundColor Cyan
+          Write-Host "👤 Account: Administrator | Password: $matKhau" -ForegroundColor White
+          Write-Host "🕐 Start: $($startTime.ToString('HH:mm:ss'))" -ForegroundColor Green
+          Write-Host "🕐 End:   $($endTime.ToString('HH:mm:ss'))" -ForegroundColor Green
+          Write-Host ""
+          
+          $monitorScript = {
+              $lastLogTime = Get-Date
+              while ($true) {
+                  $currentTime = Get-Date
+                  
+                  if (($currentTime - $lastLogTime).TotalMinutes -ge 2) {
+                      $termService = Get-Service -Name TermService -ErrorAction SilentlyContinue
+                      $rdpConnections = Get-NetTCPConnection -LocalPort 3389 -ErrorAction SilentlyContinue | Where-Object {$_.State -eq 'Established'}
+                      
+                      Write-Host "[$($currentTime.ToString('HH:mm:ss'))] 📊 Status - RDP: $($termService.Status), Connections: $($rdpConnections.Count)" -ForegroundColor Blue
+                      $lastLogTime = $currentTime
+                  }
+                  
+                  $termService = Get-Service -Name TermService -ErrorAction SilentlyContinue
+                  if ($termService.Status -ne 'Running') {
+                      Write-Host "[$($currentTime.ToString('HH:mm:ss'))] 🔄 Restarting TermService..." -ForegroundColor Yellow
+                      Start-Service -Name TermService -ErrorAction SilentlyContinue
+                  }
+                  
+                  Start-Sleep -Seconds 30
+              }
+          }
+          
+          Start-Job -ScriptBlock $monitorScript -Name "SystemMonitor"
+          
+          $frames = @('⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏')
+          $colors = @('Red', 'Yellow', 'Green', 'Cyan', 'Blue', 'Magenta')
+          $jobStartTime = Get-Date
+          
+          do {
+              $currentTime = [System.TimeZoneInfo]::ConvertTimeFromUtc((Get-Date).ToUniversalTime(), $timeZone)
+              $remainingTime = $endTime - $currentTime
+              
+              $remainingHours = [math]::Max(0, [math]::Floor($remainingTime.TotalHours))
+              $remainingMinutes = [math]::Max(0, [math]::Floor($remainingTime.TotalMinutes % 60))
+              $remainingSeconds = [math]::Max(0, [math]::Floor($remainingTime.TotalSeconds % 60))
+              
+              $frame = $frames[([int]((Get-Date) - $jobStartTime).TotalSeconds) % $frames.Length]
+              $color = $colors[([int]((Get-Date) - $jobStartTime).TotalMinutes) % $colors.Length]
+              
+              Write-Host "`r$frame [$($currentTime.ToString('HH:mm:ss'))] Remaining Time: ${remainingHours}h ${remainingMinutes}m ${remainingSeconds}s" -NoNewline -ForegroundColor $color
+              
+              Start-Sleep -Seconds 5
+              
+          } while ($remainingTime.TotalSeconds -gt 0)
+          
+          Write-Host ""
+          Write-Host "🎯 SESSION TIME EXPIRED!" -ForegroundColor Red
+          
+          Get-Job -Name "SystemMonitor" -ErrorAction SilentlyContinue | Stop-Job -PassThru | Remove-Job -Force
+
+          # Send expiration notification to Telegram
+          if ($env:TELEGRAM_BOT_TOKEN -and $env:TELEGRAM_CHAT_ID) {
+            $endMsg = "⏳ *RDP Session Expired.* Server instance is now completing."
+            $endPayload = @{ chat_id = $env:TELEGRAM_CHAT_ID; text = $endMsg; parse_mode = "Markdown" } | ConvertTo-Json
+            try {
+              Invoke-RestMethod -Uri "https://api.telegram.org/bot$($env:TELEGRAM_BOT_TOKEN)/sendMessage" `
+                                -Method Post `
+                                -ContentType "application/json; charset=utf-8" `
+                                -Body ([System.Text.Encoding]::UTF8.GetBytes($endPayload))
+            } catch {}
+          }
+
+      # OPTIONAL AUTO-RESTART
+      - name: 🔄 TRIGGER NEW CLOUD SERVER AUTOMATICALLY
+        if: github.event.inputs.auto_restart == 'true'
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          Write-Host "🔄 Triggering next RDP cloud server instance..." -ForegroundColor Yellow
+          if ($env:GH_PAT) {
+            $headers = @{
+              "Authorization" = "token $env:GH_PAT"
+              "Accept"        = "application/vnd.github.v3+json"
+            }
+            $body = @{ 
+              ref = "main"
+              inputs = @{
+                os_version = "${{ github.event.inputs.os_version }}"
+                duration = "${{ github.event.inputs.duration }}"
+                password = "${{ github.event.inputs.password }}"
+                auto_restart = "true"
+              }
+            } | ConvertTo-Json
+            
+            try {
+              # Fix: Dispatches to rdp.yml instead of non-existent main.yml
+              Invoke-RestMethod -Uri "https://api.github.com/repos/${{ github.repository }}/actions/workflows/rdp.yml/dispatches" -Method Post -Headers $headers -Body $body
+              Write-Host "✅ Successfully queued next continuous Cloud RDP server!" -ForegroundColor Green
+              
+              if ($env:TELEGRAM_BOT_TOKEN -and $env:TELEGRAM_CHAT_ID) {
+                $restartMsg = "🔄 *Auto-restart triggered.* A new RDP instance is starting up!"
+                $restartPayload = @{ chat_id = $env:TELEGRAM_CHAT_ID; text = $restartMsg; parse_mode = "Markdown" } | ConvertTo-Json
+                Invoke-RestMethod -Uri "https://api.telegram.org/bot$($env:TELEGRAM_BOT_TOKEN)/sendMessage" `
+                                  -Method Post `
+                                  -ContentType "application/json; charset=utf-8" `
+                                  -Body ([System.Text.Encoding]::UTF8.GetBytes($restartPayload))
+              }
+            } catch {
+              Write-Host "⚠️ Could not trigger next workflow: $($_.Exception.Message)" -ForegroundColor Red
+            }
+          } else {
+            Write-Host "⚠️ GH_PAT secret is missing. Add Personal Access Token to auto-restart continuous sessions." -ForegroundColor Yellow
+          }
