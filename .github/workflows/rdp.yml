@@ -217,8 +217,8 @@ jobs:
           
           Add-Content -Path $env:GITHUB_ENV -Value "TOTAL_MINUTES=$totalMinutes"
 
-      # SEND NOTIFICATION TO TELEGRAM
-      - name: 📱 SEND CONNECTION INFO TO TELEGRAM
+      # SEND NOTIFICATION & .RDP FILE TO TELEGRAM
+      - name: 📱 SEND CONNECTION INFO & .RDP FILE TO TELEGRAM
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -255,6 +255,39 @@ jobs:
               Write-Host "✅ Telegram alert sent successfully!" -ForegroundColor Green
             } catch {
               Write-Host "⚠️ Failed to send Telegram alert: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+
+            # Generate and send .rdp file
+            try {
+              $rdpLines = @(
+                "full address:s:$($env:TAILSCALE_IP):3389",
+                "username:s:$($env:RDP_USER)",
+                "prompt for credentials:i:1",
+                "administrative session:i:1",
+                "screen mode id:i:2",
+                "desktopwidth:i:1920",
+                "desktopheight:i:1080",
+                "session bpp:i:32",
+                "compression:i:1",
+                "keyboardhook:i:2",
+                "audiomode:i:0",
+                "redirectclipboard:i:1",
+                "autoreconnection enabled:i:1",
+                "authentication level:i:2",
+                "enablecredsspsupport:i:1"
+              )
+              $rdpFilePath = "$env:TEMP\RDP-$($env:TAILSCALE_IP).rdp"
+              $rdpLines | Set-Content -Path $rdpFilePath -Encoding ascii
+              $cleanPath = $rdpFilePath.Replace('\', '/')
+
+              Write-Host "📤 Sending .rdp document to Telegram..." -ForegroundColor Cyan
+              curl.exe -s -F "chat_id=$env:TELEGRAM_CHAT_ID" `
+                       -F "document=@$cleanPath" `
+                       -F "caption=📥 Double-click to connect ($($env:TAILSCALE_IP))" `
+                       "https://api.telegram.org/bot$($env:TELEGRAM_BOT_TOKEN)/sendDocument" | Out-Null
+              Write-Host "✅ .rdp file sent to Telegram successfully!" -ForegroundColor Green
+            } catch {
+              Write-Host "⚠️ Failed to send .rdp file: $($_.Exception.Message)" -ForegroundColor Yellow
             }
           } else {
             Write-Host "ℹ️ Skipping Telegram alert: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID secret is not set." -ForegroundColor Gray
